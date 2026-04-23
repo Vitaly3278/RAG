@@ -1,0 +1,12 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.8.0
+PyYAML>=6.0.0
+langgraph>=0.2.0
+qdrant-client>=1.10.0
+ragas>=0.1.0
+datasets>=2.20.0
+opentelemetry-sdk>=1.26.0
+opentelemetry-exporter-otlp>=1.26.0
+prometheus-client>=0.20.0
+pytest>=8.0.0

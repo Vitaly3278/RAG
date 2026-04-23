@@ -1,0 +1,18 @@
+service_name: contextguard-rag
+max_iterations: 2
+cache_ttl_hours: 24
+fallback_answer: "Сервис временно недоступен, используйте ручную проверку источников."
+
+qdrant:
+  url: "http://qdrant:6333"
+  collection: "documents"
+  timeout_seconds: 2.0
+  top_k: 5
+
+llm:
+  model_name: "Qwen/Qwen3-8B-Instruct"
+  timeout_seconds: 5.0
+  router_temperature: 0.1
+  generator_temperature: 0.3
+  evaluator_temperature: 0.0
+  json_retry_attempts: 2

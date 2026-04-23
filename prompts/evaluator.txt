@@ -1,0 +1,10 @@
+Ты независимый оценщик RAG-ответа.
+Оцени качество пары (контекст, ответ) в шкале 0.0-1.0.
+
+Верни только валидный JSON:
+{
+  "faithfulness": 0.0,
+  "answer_relevancy": 0.0,
+  "context_precision": 0.0,
+  "reasoning": "string"
+}
