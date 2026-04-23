@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from time import perf_counter
 from uuid import uuid4
 
@@ -9,42 +8,13 @@ from pydantic import BaseModel, Field
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from starlette.responses import Response
 
+from src.bootstrap import build_rag_service
 from src.config import load_config
-from src.graph.nodes import GraphNodes
-from src.graph.workflow import RAGService
-from src.llm.client import LLMClient
-from src.observability.logging import setup_logging
 from src.observability.tracing import setup_tracing
-from src.retrieval.qdrant_client import QdrantRetriever
-from src.retrieval.reranker import BGEReranker
 
 
 REQUEST_COUNT = Counter("rag_requests_total", "Total RAG requests")
 REQUEST_LATENCY = Histogram("rag_request_latency_seconds", "RAG request latency")
-
-
-def default_backend(prompt: str, **kwargs) -> str:  # noqa: ANN003
-    prompt_lower = prompt.lower()
-    if '"needs_retrieval"' in prompt or "router" in prompt_lower:
-        return json.dumps({"needs_retrieval": True, "rewritten_query": " ".join(prompt.split()[-12:])})
-    if '"is_faithful"' in prompt or "self-correction" in prompt_lower:
-        return json.dumps(
-            {
-                "is_faithful": True,
-                "covers_query": True,
-                "hallucinated_fragments": [],
-                "needs_correction": False,
-                "correction_query": "",
-            }
-        )
-    return json.dumps(
-        {
-            "status": "ok",
-            "answer": "Ответ сформирован на основе доступного контекста.",
-            "citations": [],
-            "missing": "",
-        }
-    )
 
 
 class AskRequest(BaseModel):
@@ -64,25 +34,8 @@ class AskResponse(BaseModel):
 
 def create_app() -> FastAPI:
     cfg = load_config()
-    logger = setup_logging()
     setup_tracing(service_name=cfg.service_name)
-
-    llm = LLMClient(default_backend, retries=cfg.llm.json_retry_attempts)
-    try:
-        retriever = QdrantRetriever(
-            url=cfg.qdrant.url,
-            collection=cfg.qdrant.collection,
-            timeout_seconds=cfg.qdrant.timeout_seconds,
-        )
-    except Exception:  # noqa: BLE001
-        class SafeRetriever:
-            def search(self, query: str, top_k: int = 5):  # noqa: ANN001
-                return []
-
-        retriever = SafeRetriever()
-    reranker = BGEReranker()
-    nodes = GraphNodes(config=cfg, llm_client=llm, retriever=retriever, reranker=reranker, logger=logger)
-    service = RAGService(app_config=cfg, nodes=nodes)
+    service = build_rag_service(cfg)
 
     app = FastAPI(title="ContextGuard RAG Service")
 

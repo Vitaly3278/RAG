@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -12,11 +13,14 @@ class QdrantConfig(BaseModel):
     collection: str = "documents"
     timeout_seconds: float = 2.0
     top_k: int = 5
+    vector_size: int = 256
 
 
 class LLMConfig(BaseModel):
-    model_name: str = "Qwen/Qwen3-8B-Instruct"
-    timeout_seconds: float = 5.0
+    provider: str = "ollama"
+    model_name: str = "qwen2.5:7b"
+    ollama_url: str = "http://localhost:11434"
+    timeout_seconds: float = 30.0
     router_temperature: float = 0.1
     generator_temperature: float = 0.3
     evaluator_temperature: float = 0.0
@@ -38,7 +42,20 @@ class AppConfig(BaseModel):
 
 
 def load_config(path: str | Path = "configs/settings.yaml") -> AppConfig:
-    return AppConfig.from_yaml(path)
+    cfg = AppConfig.from_yaml(path)
+    if os.getenv("RAG_QDRANT_URL"):
+        cfg.qdrant.url = os.environ["RAG_QDRANT_URL"]
+    if os.getenv("RAG_QDRANT_COLLECTION"):
+        cfg.qdrant.collection = os.environ["RAG_QDRANT_COLLECTION"]
+    if os.getenv("RAG_LLM_PROVIDER"):
+        cfg.llm.provider = os.environ["RAG_LLM_PROVIDER"]
+    if os.getenv("RAG_LLM_MODEL"):
+        cfg.llm.model_name = os.environ["RAG_LLM_MODEL"]
+    if os.getenv("RAG_LLM_OLLAMA_URL"):
+        cfg.llm.ollama_url = os.environ["RAG_LLM_OLLAMA_URL"]
+    if os.getenv("RAG_LLM_TIMEOUT_SECONDS"):
+        cfg.llm.timeout_seconds = float(os.environ["RAG_LLM_TIMEOUT_SECONDS"])
+    return cfg
 
 
 def merge_dict(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:

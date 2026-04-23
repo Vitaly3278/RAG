@@ -1,6 +1,7 @@
 # ContextGuard RAG (LangGraph + Qdrant)
 
 Production-ready каркас RAG-системы с:
+
 - адаптивным retrieval,
 - self-correction циклом,
 - FastAPI API,
@@ -13,6 +14,7 @@ Production-ready каркас RAG-системы с:
 `Router -> Retriever -> Reranker -> Generator -> SelfCorrection -> Output`
 
 Поведение пайплайна:
+
 1. `Router` решает, нужен ли retrieval, и переписывает запрос.
 2. `Retriever` получает чанки из Qdrant.
 3. `Reranker` сортирует контекст (интерфейс под BGE-reranker).
@@ -53,14 +55,26 @@ docker compose up --build
 ```
 
 По умолчанию поднимаются:
+
 - API на `:8000`
 - Qdrant на `:6333`
+- Ollama на `:11434`
+
+После старта контейнеров загрузи модель:
+
+```bash
+docker exec -it rag-ollama ollama pull qwen2.5:7b
+# или
+docker exec -it rag-ollama ollama pull qwen3:8b
+docker exec -it rag-ollama ollama pull nomic-embed-text
+```
 
 ## API контракт
 
 ### `POST /ask`
 
 Request:
+
 ```json
 {
   "query": "string",
@@ -69,6 +83,7 @@ Request:
 ```
 
 Response:
+
 ```json
 {
   "request_id": "string",
@@ -105,6 +120,7 @@ pytest -q
 ```
 
 Покрываются:
+
 - валидация схемы роутера,
 - ветвление self-correction и лимит итераций,
 - e2e граф с mock Qdrant/LLM,
@@ -116,9 +132,21 @@ pytest -q
 
 ```bash
 python -m src.eval.ragas_batch --input data/eval.json --output ragas_results.json
+
+# готовый сценарий на 20-30 публичных вопросов
+python -m src.eval.run_april_2026 --limit 25 --output eval_results/april_2026.json --judge-model qwen2.5-coder:1.5b
+```
+
+## Загрузка публичных тестовых данных в Qdrant
+
+Скрипт использует публичный `squad` и режет документы на чанки:
+
+```bash
+python -m src.ingest.public_faq_to_qdrant --dataset squad --split "train[:120]" --limit 120 --chunk-size 120 --overlap 30 --recreate
 ```
 
 Целевые метрики:
+
 - `faithfulness > 0.85`
 - `latency p95 < 2.5s`
 
@@ -131,6 +159,7 @@ python -m src.eval.ragas_batch --input data/eval.json --output ragas_results.jso
 ## Конфигурация
 
 Основные параметры в `configs/settings.yaml`:
+
 - `max_iterations` — максимум циклов коррекции.
 - `qdrant.*` — endpoint/collection/top_k/timeout.
 - `llm.*` — модель, температуры и retry JSON-парсинга.
@@ -138,7 +167,7 @@ python -m src.eval.ragas_batch --input data/eval.json --output ragas_results.jso
 
 ## Что важно перед продом
 
-- Подключить реальный LLM backend для `Qwen3-8B-Instruct`.
-- Добавить ingestion-пайплайн документов в Qdrant.
+- Проверить качество на внутреннем датасете и донастроить prompts.
 - Настроить экспортер трейсинга в Phoenix.
 - Запустить нагрузочные тесты и проверить p95 latency.
+

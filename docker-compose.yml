@@ -8,6 +8,7 @@ services:
       - "8000:8000"
     depends_on:
       - qdrant
+      - ollama
     environment:
       - PYTHONUNBUFFERED=1
     volumes:
@@ -21,5 +22,14 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: rag-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+
 volumes:
   qdrant_data:
+  ollama_data:
