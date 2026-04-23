@@ -8,10 +8,13 @@ qdrant:
   collection: "documents"
   timeout_seconds: 2.0
   top_k: 5
+  vector_size: 256
 
 llm:
-  model_name: "Qwen/Qwen3-8B-Instruct"
-  timeout_seconds: 5.0
+  provider: "ollama"
+  model_name: "qwen2.5:7b"
+  ollama_url: "http://ollama:11434"
+  timeout_seconds: 30.0
   router_temperature: 0.1
   generator_temperature: 0.3
   evaluator_temperature: 0.0

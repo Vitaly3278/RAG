@@ -1,39 +1,26 @@
-# ContextGuard RAG (LangGraph + Qdrant)
+# ContextGuard RAG (LangGraph + Qdrant + Ollama)
 
-Production-ready каркас RAG-системы с:
-- адаптивным retrieval,
-- self-correction циклом,
-- FastAPI API,
-- трассировкой и метриками,
-- offline оценкой качества через RAGAS.
+Production-ready каркас RAG-системы с адаптивным retrieval, self-correction контуром, FastAPI API, визуализацией, мониторингом и offline-оценкой качества.
 
-## Что реализовано
+## Что внутри
 
-Граф выполнения:
-`Router -> Retriever -> Reranker -> Generator -> SelfCorrection -> Output`
-
-Поведение пайплайна:
-1. `Router` решает, нужен ли retrieval, и переписывает запрос.
-2. `Retriever` получает чанки из Qdrant.
-3. `Reranker` сортирует контекст (интерфейс под BGE-reranker).
-4. `Generator` формирует ответ строго по контексту.
-5. `SelfCorrection` проверяет faithful/completeness и, при необходимости, запускает повторный поиск.
-6. `Output` возвращает нормализованный ответ и тайминги.
-
-Если Qdrant/LLM недоступен, система не падает и возвращает `fallback`.
+- Граф: `Router -> Retriever -> Reranker -> Generator -> SelfCorrection -> Output`
+- Роутер решает, нужен ли retrieval, и переписывает запрос.
+- Генератор и self-correction работают по строгому JSON-контракту.
+- Деградация безопасная: при проблемах с LLM/Qdrant отдается `fallback`.
+- Наблюдаемость: `GET /metrics`, health/live/ready endpoints.
 
 ## Структура проекта
 
-- `architecture.md` — описание архитектуры и потоков.
-- `src/graph/` — состояние, узлы и сборка LangGraph.
-- `src/retrieval/` — клиент Qdrant и reranker.
-- `src/llm/` — JSON-ориентированный LLM-клиент.
 - `src/api/` — FastAPI приложение.
-- `src/observability/` — JSON-логирование и OTEL tracing.
-- `src/eval/` — offline batch-оценка RAGAS.
-- `prompts/` — контракты промптов.
-- `configs/` — runtime-настройки.
-- `tests/` — набор pytest-тестов.
+- `src/graph/` — state + узлы + workflow (LangGraph).
+- `src/llm/` — JSON-клиент и Ollama backend.
+- `src/retrieval/` — Qdrant retriever, embeddings, reranker.
+- `src/ingest/` — ingestion скрипты.
+- `src/eval/` — RAGAS batch/апрельский прогон.
+- `src/dashboard/` — Streamlit dashboard.
+- `configs/` — runtime, monitoring, grafana/nginx provisioning.
+- `tests/` — pytest покрытие.
 
 ## Быстрый старт (локально)
 
@@ -44,23 +31,61 @@ pip install -r requirements.txt
 uvicorn src.api.main:app --reload
 ```
 
-Сервис поднимется на `http://127.0.0.1:8000`.
+API будет доступен на [http://127.0.0.1:8000](http://127.0.0.1:8000).
 
-## Запуск через Docker
+## Docker Compose (dev stack)
 
 ```bash
-docker compose up --build
+docker compose up --build -d
 ```
 
-По умолчанию поднимаются:
-- API на `:8000`
-- Qdrant на `:6333`
+Поднимаются сервисы:
 
-## API контракт
+- API: [http://localhost:8000](http://localhost:8000)
+- Qdrant: `localhost:6333`
+- Ollama: `localhost:11434`
+- Streamlit: [http://localhost:8501](http://localhost:8501)
+- Prometheus: [http://localhost:9090](http://localhost:9090)
+- Grafana: [http://localhost:3000](http://localhost:3000)
+
+После старта подгрузи модели в Ollama:
+
+```bash
+docker exec -it rag-ollama ollama pull qwen2.5:7b
+# или
+docker exec -it rag-ollama ollama pull qwen3:8b
+docker exec -it rag-ollama ollama pull nomic-embed-text
+```
+
+## Визуализация
+
+### Streamlit dashboard
+
+```bash
+streamlit run src/dashboard/streamlit_app.py
+```
+
+Dashboard показывает:
+
+- question -> answer -> status;
+- список источников (`citations`);
+- тайминги узлов (`router/retriever/reranker/generator/self_correction/total`);
+- срез prometheus-метрик из `GET /metrics`.
+
+### Скриншоты и демо
+
+- Dashboard: `docs/screenshots/dashboard.png`
+- Grafana: `docs/screenshots/grafana.png`
+- Локальная демо-ссылка: [http://localhost:8501](http://localhost:8501)
+
+Если скриншоты еще не добавлены, см. `docs/screenshots/README.md`.
+
+## API
 
 ### `POST /ask`
 
 Request:
+
 ```json
 {
   "query": "string",
@@ -69,6 +94,7 @@ Request:
 ```
 
 Response:
+
 ```json
 {
   "request_id": "string",
@@ -88,15 +114,55 @@ Response:
 }
 ```
 
-### `GET /health`
+### Health/metrics endpoints
 
-```json
-{"status":"ok"}
+- `GET /health` — базовый статус.
+- `GET /health/live` — liveness probe.
+- `GET /health/ready` — readiness probe.
+- `GET /metrics` — Prometheus-совместимые метрики.
+
+## Мониторинг
+
+В `docker-compose.yml` уже подключены:
+
+- `prometheus` (scrape API по `api:8000/metrics`);
+- `grafana` (datasource provisioning в `configs/grafana/provisioning`).
+
+## Ingestion в Qdrant
+
+Скрипт использует публичный `squad` и делает chunking:
+
+```bash
+python -m src.ingest.public_faq_to_qdrant --dataset squad --split "train[:120]" --limit 120 --chunk-size 120 --overlap 30 --recreate
 ```
 
-### `GET /metrics`
+## Offline evaluation (RAGAS)
 
-Prometheus-совместимые метрики.
+```bash
+python -m src.eval.ragas_batch --input data/eval.json --output ragas_results.json
+python -m src.eval.run_april_2026 --limit 25 --output eval_results/april_2026.json --judge-model qwen2.5-coder:1.5b
+```
+
+Целевые ориентиры:
+
+- `faithfulness > 0.85`
+- `latency p95 < 2.5s`
+
+### Таблица метрик (апрель 2026)
+
+| Batch | Sample count | Faithfulness | Answer relevancy | Context precision |
+|---|---:|---:|---:|---:|
+| `eval_results/april_2026.json` | 20 | ~0.61 | 0.4726 | ~0.58 |
+
+## Продовый деплой
+
+Продовый compose с reverse proxy (nginx), health checks и graceful shutdown:
+
+```bash
+docker compose -f docker-compose.prod.yml up --build -d
+```
+
+Внешняя точка входа: `http://localhost/` -> `nginx` -> API.
 
 ## Тесты
 
@@ -104,41 +170,9 @@ Prometheus-совместимые метрики.
 pytest -q
 ```
 
-Покрываются:
-- валидация схемы роутера,
-- ветвление self-correction и лимит итераций,
-- e2e граф с mock Qdrant/LLM,
-- API контракт и метрики.
+Покрываются схема роутера, ветвление self-correction, API-контракт, health/metrics endpoints и e2e workflow.
 
-## Offline оценка качества (RAGAS)
+## Архитектурные решения
 
-Подготовь JSON-датасет и запусти:
+Подробные решения и trade-offs: `ARCHITECTURE_DECISIONS.md`.
 
-```bash
-python -m src.eval.ragas_batch --input data/eval.json --output ragas_results.json
-```
-
-Целевые метрики:
-- `faithfulness > 0.85`
-- `latency p95 < 2.5s`
-
-## Наблюдаемость
-
-- JSON-логи по узлам (`request_id`, `node`, `latency_ms`, `status`, токены).
-- OpenTelemetry интеграция в `src/observability/tracing.py`.
-- Метрики для Prometheus через `GET /metrics`.
-
-## Конфигурация
-
-Основные параметры в `configs/settings.yaml`:
-- `max_iterations` — максимум циклов коррекции.
-- `qdrant.*` — endpoint/collection/top_k/timeout.
-- `llm.*` — модель, температуры и retry JSON-парсинга.
-- `fallback_answer` — безопасный ответ при деградации.
-
-## Что важно перед продом
-
-- Подключить реальный LLM backend для `Qwen3-8B-Instruct`.
-- Добавить ingestion-пайплайн документов в Qdrant.
-- Настроить экспортер трейсинга в Phoenix.
-- Запустить нагрузочные тесты и проверить p95 latency.

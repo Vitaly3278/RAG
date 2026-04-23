@@ -1,50 +1,21 @@
 from __future__ import annotations
 
-import json
+from contextlib import asynccontextmanager
 from time import perf_counter
 from uuid import uuid4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from starlette.responses import Response
 
+from src.bootstrap import build_rag_service
 from src.config import load_config
-from src.graph.nodes import GraphNodes
-from src.graph.workflow import RAGService
-from src.llm.client import LLMClient
-from src.observability.logging import setup_logging
 from src.observability.tracing import setup_tracing
-from src.retrieval.qdrant_client import QdrantRetriever
-from src.retrieval.reranker import BGEReranker
 
 
 REQUEST_COUNT = Counter("rag_requests_total", "Total RAG requests")
 REQUEST_LATENCY = Histogram("rag_request_latency_seconds", "RAG request latency")
-
-
-def default_backend(prompt: str, **kwargs) -> str:  # noqa: ANN003
-    prompt_lower = prompt.lower()
-    if '"needs_retrieval"' in prompt or "router" in prompt_lower:
-        return json.dumps({"needs_retrieval": True, "rewritten_query": " ".join(prompt.split()[-12:])})
-    if '"is_faithful"' in prompt or "self-correction" in prompt_lower:
-        return json.dumps(
-            {
-                "is_faithful": True,
-                "covers_query": True,
-                "hallucinated_fragments": [],
-                "needs_correction": False,
-                "correction_query": "",
-            }
-        )
-    return json.dumps(
-        {
-            "status": "ok",
-            "answer": "Ответ сформирован на основе доступного контекста.",
-            "citations": [],
-            "missing": "",
-        }
-    )
 
 
 class AskRequest(BaseModel):
@@ -64,30 +35,27 @@ class AskResponse(BaseModel):
 
 def create_app() -> FastAPI:
     cfg = load_config()
-    logger = setup_logging()
     setup_tracing(service_name=cfg.service_name)
+    service = build_rag_service(cfg)
+    app_state = {"ready": False, "shutting_down": False}
 
-    llm = LLMClient(default_backend, retries=cfg.llm.json_retry_attempts)
-    try:
-        retriever = QdrantRetriever(
-            url=cfg.qdrant.url,
-            collection=cfg.qdrant.collection,
-            timeout_seconds=cfg.qdrant.timeout_seconds,
-        )
-    except Exception:  # noqa: BLE001
-        class SafeRetriever:
-            def search(self, query: str, top_k: int = 5):  # noqa: ANN001
-                return []
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        app_state["ready"] = True
+        app_state["shutting_down"] = False
+        try:
+            yield
+        finally:
+            # Prevent new expensive requests while shutdown is in progress.
+            app_state["shutting_down"] = True
+            app_state["ready"] = False
 
-        retriever = SafeRetriever()
-    reranker = BGEReranker()
-    nodes = GraphNodes(config=cfg, llm_client=llm, retriever=retriever, reranker=reranker, logger=logger)
-    service = RAGService(app_config=cfg, nodes=nodes)
-
-    app = FastAPI(title="ContextGuard RAG Service")
+    app = FastAPI(title="ContextGuard RAG Service", lifespan=lifespan)
 
     @app.post("/ask", response_model=AskResponse)
     def ask(payload: AskRequest) -> AskResponse:
+        if app_state["shutting_down"]:
+            raise HTTPException(status_code=503, detail="Service is shutting down")
         REQUEST_COUNT.inc()
         started = perf_counter()
         request_id = payload.request_id or str(uuid4())
@@ -114,6 +82,14 @@ def create_app() -> FastAPI:
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/health/live")
+    def health_live() -> dict[str, str]:
+        return {"status": "alive"}
+
+    @app.get("/health/ready")
+    def health_ready() -> dict[str, str]:
+        return {"status": "ready" if app_state["ready"] and not app_state["shutting_down"] else "not_ready"}
 
     @app.get("/metrics")
     def metrics() -> Response:

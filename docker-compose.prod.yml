@@ -1,0 +1,69 @@
+version: "3.9"
+
+services:
+  reverse-proxy:
+    image: nginx:stable-alpine
+    container_name: rag-reverse-proxy
+    ports:
+      - "80:80"
+    volumes:
+      - ./configs/nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  api:
+    build: .
+    container_name: rag-api-prod
+    expose:
+      - "8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - RAG_QDRANT_URL=http://qdrant:6333
+      - RAG_LLM_OLLAMA_URL=http://ollama:11434
+    command: ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-graceful-shutdown", "30"]
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/health/ready', timeout=2)\""]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: rag-qdrant-prod
+    expose:
+      - "6333"
+    volumes:
+      - qdrant_data_prod:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:6333/healthz', timeout=2)\""]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: rag-ollama-prod
+    expose:
+      - "11434"
+    volumes:
+      - ollama_data_prod:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:11434/api/tags', timeout=2)\""]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  qdrant_data_prod:
+  ollama_data_prod:
