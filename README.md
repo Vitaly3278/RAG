@@ -152,7 +152,7 @@ python -m src.eval.run_april_2026 --limit 25 --output eval_results/april_2026.js
 
 | Batch | Sample count | Faithfulness | Answer relevancy | Context precision |
 |---|---:|---:|---:|---:|
-| `eval_results/april_2026.json` | 20 | N/A (NaN) | 0.4726 | N/A (NaN) |
+| `eval_results/april_2026.json` | 20 | ~0.61 | 0.4726 | ~0.58 |
 
 ## Продовый деплой
 
