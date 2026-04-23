@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from time import perf_counter
 from uuid import uuid4
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 from starlette.responses import Response
@@ -36,11 +37,25 @@ def create_app() -> FastAPI:
     cfg = load_config()
     setup_tracing(service_name=cfg.service_name)
     service = build_rag_service(cfg)
+    app_state = {"ready": False, "shutting_down": False}
 
-    app = FastAPI(title="ContextGuard RAG Service")
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        app_state["ready"] = True
+        app_state["shutting_down"] = False
+        try:
+            yield
+        finally:
+            # Prevent new expensive requests while shutdown is in progress.
+            app_state["shutting_down"] = True
+            app_state["ready"] = False
+
+    app = FastAPI(title="ContextGuard RAG Service", lifespan=lifespan)
 
     @app.post("/ask", response_model=AskResponse)
     def ask(payload: AskRequest) -> AskResponse:
+        if app_state["shutting_down"]:
+            raise HTTPException(status_code=503, detail="Service is shutting down")
         REQUEST_COUNT.inc()
         started = perf_counter()
         request_id = payload.request_id or str(uuid4())
@@ -67,6 +82,14 @@ def create_app() -> FastAPI:
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/health/live")
+    def health_live() -> dict[str, str]:
+        return {"status": "alive"}
+
+    @app.get("/health/ready")
+    def health_ready() -> dict[str, str]:
+        return {"status": "ready" if app_state["ready"] and not app_state["shutting_down"] else "not_ready"}
 
     @app.get("/metrics")
     def metrics() -> Response:

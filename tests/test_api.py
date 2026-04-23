@@ -12,6 +12,16 @@ def test_health() -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_health_extended() -> None:
+    client = TestClient(create_app())
+    live = client.get("/health/live")
+    ready = client.get("/health/ready")
+    assert live.status_code == 200
+    assert ready.status_code == 200
+    assert live.json() == {"status": "alive"}
+    assert ready.json()["status"] in {"ready", "not_ready"}
+
+
 def test_ask_contract() -> None:
     client = TestClient(create_app())
     response = client.post("/ask", json={"query": "Какая политика отпусков?"})
